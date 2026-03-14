@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # MongoDB instance shared for local development
   mongodb:
