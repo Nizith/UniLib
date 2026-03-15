@@ -27,7 +27,7 @@ services:
       - "3002:3002"
     environment:
       PORT: 3002
-      MONGO_URI: mongodb+srv://movindusenuraaluthge:200205002121Senu@sliit.9pnop.mongodb.net/?appName=UniLibLoan
+      MONGO_URI: mongodb+srv://movindusenuraaluthge:200205002121Senu@sliit.9pnop.mongodb.net/UniLibLoan-books?appName=SLIIT
       JWT_SECRET: Senu2002
     depends_on:
       - mongodb
