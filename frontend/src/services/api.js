@@ -40,6 +40,70 @@ export const getProfile = async () => {
   return response.data;
 };
 
+export const updateProfile = async (profileData) => {
+  const response = await createRequest('users').put('/users/profile', profileData, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+export const deleteProfile = async () => {
+  const response = await createRequest('users').delete('/users/profile', {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+export const changePassword = async (currentPassword, newPassword, confirmNewPassword) => {
+  const response = await createRequest('users').patch(
+    '/users/profile/change-password',
+    { currentPassword, newPassword, confirmNewPassword },
+    {
+      headers: getAuthHeaders(),
+    }
+  );
+  return response.data;
+};
+
+export const getStudents = async () => {
+  const response = await createRequest('users').get('/users/students', {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+export const updateStudentMembership = async (studentId, membershipStatus) => {
+  const response = await createRequest('users').patch(
+    `/users/students/${studentId}/membership`,
+    { membershipStatus },
+    {
+      headers: getAuthHeaders(),
+    }
+  );
+  return response.data;
+};
+
+export const getManageMembers = async () => {
+  const response = await createRequest('users').get('/users/members', {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+export const updateManageMember = async (memberId, payload) => {
+  const response = await createRequest('users').put(`/users/members/${memberId}`, payload, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
+export const deleteManageMember = async (memberId) => {
+  const response = await createRequest('users').delete(`/users/members/${memberId}`, {
+    headers: getAuthHeaders(),
+  });
+  return response.data;
+};
+
 export const getBooks = async (search = '') => {
   const params = search ? { search } : {};
   const response = await createRequest('books').get('/books', {
