@@ -1,0 +1,65 @@
+# Build Docker images and push to Azure Container Registry.
+# After images are in ACR, either re-run infra/azure/deploy.sh (updates) or use:
+#   az containerapp update --name <app> --resource-group unilib-rg --image <acr>/<app>:<tag>
+#
+# Secrets (GitHub repo → Settings → Secrets):
+#   ACR_LOGIN_SERVER   e.g. myregistry.azurecr.io
+#   ACR_USERNAME       ACR admin username
+#   ACR_PASSWORD       ACR admin password
+#
+# Optional — needed to build the frontend image in CI (same URLs as first manual deploy):
+#   GATEWAY_PUBLIC_ORIGIN  e.g. https://api-gateway-xxxxx.azurecontainerapps.io  (no trailing slash)
+
+name: Azure ACR build and push
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'services/**'
+      - 'frontend/**'
+      - '.github/workflows/azure-container-apps.yml'
+
+jobs:
+  docker-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push microservices
+        env:
+          REG: ${{ secrets.ACR_LOGIN_SERVER }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA:0:7}"
+          for svc in user-service book-catalog-service loan-service notification-service api-gateway; do
+            docker build -t "$REG/$svc:$TAG" -t "$REG/$svc:latest" "./services/$svc"
+            docker push "$REG/$svc:$TAG"
+            docker push "$REG/$svc:latest"
+          done
+
+      - name: Build and push frontend (optional)
+        env:
+          REG: ${{ secrets.ACR_LOGIN_SERVER }}
+          ORIGIN: ${{ secrets.GATEWAY_PUBLIC_ORIGIN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ORIGIN:-}" ]; then
+            echo "GATEWAY_PUBLIC_ORIGIN secret not set — skipping frontend image (set it after first deploy)."
+            exit 0
+          fi
+          TAG="${GITHUB_SHA:0:7}"
+          docker build -f frontend/Dockerfile.azure \
+            --build-arg "VITE_API_GATEWAY_URL=${ORIGIN}/api" \
+            --build-arg "VITE_NOTIFICATION_SOCKET_URL=${ORIGIN}" \
+            -t "$REG/frontend:$TAG" -t "$REG/frontend:latest" ./frontend
+          docker push "$REG/frontend:$TAG"
+          docker push "$REG/frontend:latest"
