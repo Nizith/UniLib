@@ -4,7 +4,14 @@ import { useAuth } from './AuthContext.jsx';
 
 const SocketContext = createContext(null);
 
-const SOCKET_URL = import.meta.env.VITE_NOTIFICATION_SOCKET_URL || 'http://localhost:3004';
+const socketUrlFromEnv = import.meta.env.VITE_NOTIFICATION_SOCKET_URL;
+
+const getSocketUrl = () => {
+  if (socketUrlFromEnv !== undefined && socketUrlFromEnv !== '') {
+    return socketUrlFromEnv;
+  }
+  return undefined;
+};
 
 export function SocketProvider({ children }) {
   const { user } = useAuth();
@@ -19,9 +26,9 @@ export function SocketProvider({ children }) {
       return;
     }
 
-    const newSocket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling'],
-    });
+    const url = getSocketUrl();
+    const opts = { transports: ['websocket', 'polling'] };
+    const newSocket = url ? io(url, opts) : io(opts);
 
     newSocket.on('connect', () => {
       console.log('Socket connected');
