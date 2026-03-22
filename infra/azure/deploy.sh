@@ -70,11 +70,12 @@ acr_build "loan-service" "$REPO_ROOT/services/loan-service"
 acr_build "notification-service" "$REPO_ROOT/services/notification-service"
 acr_build "api-gateway" "$REPO_ROOT/services/api-gateway"
 
-# Internal HTTP between apps in the same Container Apps environment (include port).
-U_USER="http://user-service:3001"
-U_BOOK="http://book-catalog-service:3002"
-U_LOAN="http://loan-service:3003"
-U_NOTIF="http://notification-service:3004"
+# Internal HTTP between apps in the same Container Apps environment.
+# Azure Container Apps internal ingress listens on port 80 regardless of the container port.
+U_USER="http://user-service"
+U_BOOK="http://book-catalog-service"
+U_LOAN="http://loan-service"
+U_NOTIF="http://notification-service"
 
 registry_flags=( --registry-server "$ACR_LOGIN_SERVER" --registry-username "$ACR_USER" --registry-password "$ACR_PASS" )
 
