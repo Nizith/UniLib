@@ -3,11 +3,23 @@ const { body, validationResult } = require("express-validator");
 const axios = require("axios");
 const Loan = require("../models/Loan");
 const { auth } = require("../middleware/auth");
+const { INTERNAL_SERVICE_HEADER, requireInternalService } = require("../middleware/serviceAuth");
 
 const router = express.Router();
 
 const BOOK_SERVICE_URL = process.env.BOOK_SERVICE_URL || "http://localhost:3002";
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || "http://localhost:3004";
+const internalServiceHeaders = process.env.INTERNAL_SERVICE_TOKEN
+  ? { [INTERNAL_SERVICE_HEADER]: process.env.INTERNAL_SERVICE_TOKEN }
+  : {};
+const canViewUserLoans = (requestUser, resourceUserId) =>
+  requestUser && (requestUser.id === resourceUserId || requestUser.role === "admin" || requestUser.role === "staff");
+const normalizeAvailableCopies = (book) => {
+  const totalCopies = Number(book.totalCopies) || 0;
+  const availableCopies = Number(book.availableCopies) || 0;
+
+  return Math.min(Math.max(availableCopies, 0), totalCopies);
+};
 
 // POST /borrow - Borrow a book (protected)
 router.post(
@@ -67,9 +79,15 @@ router.post(
 
       // Update book availability (decrement availableCopies)
       try {
-        await axios.patch(`${BOOK_SERVICE_URL}/api/books/${bookId}/availability`, {
-          availableCopies: book.availableCopies - 1,
-        });
+        const normalizedAvailableCopies = normalizeAvailableCopies(book);
+
+        await axios.patch(
+          `${BOOK_SERVICE_URL}/api/books/${bookId}/availability`,
+          {
+            availableCopies: Math.max(normalizedAvailableCopies - 1, 0),
+          },
+          { headers: internalServiceHeaders }
+        );
       } catch (error) {
         // Rollback: delete the loan if we can't update availability
         await Loan.findByIdAndDelete(savedLoan._id);
@@ -78,13 +96,17 @@ router.post(
 
       // Send borrow confirmation notification (fire and forget)
       try {
-        await axios.post(`${NOTIFICATION_SERVICE_URL}/api/notifications`, {
-          userId,
-          type: "borrow_confirmation",
-          message: `You have successfully borrowed "${book.title}". Due date: ${dueDate.toDateString()}`,
-          bookTitle: book.title,
-          loanId: savedLoan._id,
-        });
+        await axios.post(
+          `${NOTIFICATION_SERVICE_URL}/api/notifications`,
+          {
+            userId,
+            type: "borrow_confirmation",
+            message: `You have successfully borrowed "${book.title}". Due date: ${dueDate.toDateString()}`,
+            bookTitle: book.title,
+            loanId: savedLoan._id,
+          },
+          { headers: internalServiceHeaders }
+        );
       } catch (error) {
         // Notification failure should not block the borrow operation
         console.error("Failed to send borrow notification:", error.message);
@@ -140,23 +162,32 @@ router.post("/return/:loanId", auth, async (req, res) => {
     try {
       const bookResponse = await axios.get(`${BOOK_SERVICE_URL}/api/books/${loan.bookId}`);
       const book = bookResponse.data;
+      const normalizedAvailableCopies = normalizeAvailableCopies(book);
 
-      await axios.patch(`${BOOK_SERVICE_URL}/api/books/${loan.bookId}/availability`, {
-        availableCopies: book.availableCopies + 1,
-      });
+      await axios.patch(
+        `${BOOK_SERVICE_URL}/api/books/${loan.bookId}/availability`,
+        {
+          availableCopies: Math.min(normalizedAvailableCopies + 1, Number(book.totalCopies) || 0),
+        },
+        { headers: internalServiceHeaders }
+      );
     } catch (error) {
       console.error("Failed to update book availability:", error.message);
     }
 
     // Send return confirmation notification (fire and forget)
     try {
-      await axios.post(`${NOTIFICATION_SERVICE_URL}/api/notifications`, {
-        userId: loan.userId,
-        type: "return_confirmation",
-        message: `You have successfully returned "${loan.bookTitle}".`,
-        bookTitle: loan.bookTitle,
-        loanId: loan._id,
-      });
+      await axios.post(
+        `${NOTIFICATION_SERVICE_URL}/api/notifications`,
+        {
+          userId: loan.userId,
+          type: "return_confirmation",
+          message: `You have successfully returned "${loan.bookTitle}".`,
+          bookTitle: loan.bookTitle,
+          loanId: loan._id,
+        },
+        { headers: internalServiceHeaders }
+      );
     } catch (error) {
       console.error("Failed to send return notification:", error.message);
     }
@@ -170,6 +201,10 @@ router.post("/return/:loanId", auth, async (req, res) => {
 // GET /user/:userId - Get all loans for a user (protected)
 router.get("/user/:userId", auth, async (req, res) => {
   try {
+    if (!canViewUserLoans(req.user, req.params.userId)) {
+      return res.status(403).json({ message: "Access denied. You can only view your own loans." });
+    }
+
     const loans = await Loan.find({ userId: req.params.userId }).sort({ createdAt: -1 });
     res.json(loans);
   } catch (error) {
@@ -177,8 +212,8 @@ router.get("/user/:userId", auth, async (req, res) => {
   }
 });
 
-// GET /due-soon - Get loans due within 2 days (for notification service, no auth)
-router.get("/due-soon", async (req, res) => {
+// GET /due-soon - Get loans due within 2 days (internal service only)
+router.get("/due-soon", requireInternalService, async (req, res) => {
   try {
     const now = new Date();
     const twoDaysLater = new Date();
@@ -195,8 +230,8 @@ router.get("/due-soon", async (req, res) => {
   }
 });
 
-// GET /overdue - Get all overdue loans (for notification service, no auth)
-router.get("/overdue", async (req, res) => {
+// GET /overdue - Get all overdue loans (internal service only)
+router.get("/overdue", requireInternalService, async (req, res) => {
   try {
     const now = new Date();
 
@@ -219,12 +254,16 @@ router.get("/overdue", async (req, res) => {
 });
 
 // GET /:id - Get loan by ID
-router.get("/:id", async (req, res) => {
+router.get("/:id", auth, async (req, res) => {
   try {
     const loan = await Loan.findById(req.params.id);
 
     if (!loan) {
       return res.status(404).json({ message: "Loan record not found" });
+    }
+
+    if (!canViewUserLoans(req.user, loan.userId.toString())) {
+      return res.status(403).json({ message: "Access denied. You can only view your own loans." });
     }
 
     res.json(loan);

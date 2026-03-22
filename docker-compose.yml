@@ -1,7 +1,29 @@
+name: unilib
+
+x-service-security: &service-security
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
 services:
+  mongo:
+    image: mongo:7
+    container_name: unilib-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - internal
+
   api-gateway:
     build: ./services/api-gateway
     container_name: unilib-api-gateway
+    <<: *service-security
     ports:
       - "8080:8080"
     environment:
@@ -9,52 +31,92 @@ services:
       BOOK_SERVICE_URL: http://book-catalog-service:3002
       LOAN_SERVICE_URL: http://loan-service:3003
       NOTIFICATION_SERVICE_URL: http://notification-service:3004
+      CORS_ORIGIN: http://localhost:3000
     depends_on:
       - user-service
       - book-catalog-service
       - loan-service
       - notification-service
+    networks:
+      - public
+      - internal
 
   user-service:
     build: ./services/user-service
     container_name: unilib-user-service
-    ports:
-      - "3001:3001"
+    <<: *service-security
+    expose:
+      - "3001"
     env_file:
       - ./services/user-service/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017/unilib-users
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-unilib-internal-dev-token}
+      CORS_ORIGIN: http://localhost:3000
+    depends_on:
+      - mongo
+    networks:
+      - internal
 
   book-catalog-service:
     build: ./services/book-catalog-service
     container_name: unilib-book-catalog-service
-    ports:
-      - "3002:3002"
+    <<: *service-security
+    expose:
+      - "3002"
     env_file:
       - ./services/book-catalog-service/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017/unilib-books
+      CORS_ORIGIN: http://localhost:3000
+    depends_on:
+      - mongo
+    networks:
+      - internal
 
   loan-service:
     build: ./services/loan-service
     container_name: unilib-loan-service
-    ports:
-      - "3003:3003"
+    <<: *service-security
+    expose:
+      - "3003"
     env_file:
       - ./services/loan-service/.env
     environment:
+      MONGO_URI: mongodb://mongo:27017/unilib-loans
       BOOK_SERVICE_URL: http://book-catalog-service:3002
       NOTIFICATION_SERVICE_URL: http://notification-service:3004
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-unilib-internal-dev-token}
+      CORS_ORIGIN: http://localhost:3000
     depends_on:
+      - mongo
       - book-catalog-service
       - notification-service
+    networks:
+      - internal
 
   notification-service:
     build: ./services/notification-service
     container_name: unilib-notification-service
-    ports:
-      - "3004:3004"
+    <<: *service-security
+    expose:
+      - "3004"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     env_file:
       - ./services/notification-service/.env
     environment:
+      MONGO_URI: mongodb://mongo:27017/unilib-notifications
       LOAN_SERVICE_URL: http://loan-service:3003
       USER_SERVICE_URL: http://user-service:3001
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-unilib-internal-dev-token}
+      CORS_ORIGIN: http://localhost:3000
+    depends_on:
+      - mongo
+    networks:
+      - public
+      - internal
 
   frontend:
     build:
@@ -66,3 +128,14 @@ services:
       - "3000:80"
     depends_on:
       - api-gateway
+    networks:
+      - public
+      - internal
+
+networks:
+  public:
+  internal:
+    internal: true
+
+volumes:
+  mongo-data:

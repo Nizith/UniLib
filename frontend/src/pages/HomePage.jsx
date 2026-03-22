@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getBooks } from '../services/api.js';
 
@@ -7,29 +7,49 @@ function HomePage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const latestRequestRef = useRef(0);
   const availableTitles = books.filter((book) => book.availableCopies > 0).length;
   const categoryCount = new Set(books.map((book) => book.category).filter(Boolean)).size;
 
   const fetchBooks = async (query = '') => {
+    const requestId = latestRequestRef.current + 1;
+    latestRequestRef.current = requestId;
     setLoading(true);
+
     try {
       const data = await getBooks(query);
+
+      if (latestRequestRef.current !== requestId) {
+        return;
+      }
+
       setBooks(Array.isArray(data) ? data : data.books || []);
     } catch (error) {
       console.error('Failed to fetch books:', error);
+
+      if (latestRequestRef.current !== requestId) {
+        return;
+      }
+
       setBooks([]);
     } finally {
-      setLoading(false);
+      if (latestRequestRef.current === requestId) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchBooks();
-  }, []);
+    const timeoutId = setTimeout(() => {
+      fetchBooks(search.trim());
+    }, 250);
+
+    return () => clearTimeout(timeoutId);
+  }, [search]);
 
   const handleSearch = (event) => {
     event.preventDefault();
-    fetchBooks(search);
+    fetchBooks(search.trim());
   };
 
   return (

@@ -56,6 +56,10 @@ router.post(
     body("isbn").notEmpty().withMessage("ISBN is required"),
     body("category").notEmpty().withMessage("Category is required"),
     body("totalCopies").optional().isInt({ min: 1 }).withMessage("Total copies must be at least 1"),
+    body("availableCopies")
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage("Available copies must be 0 or greater"),
     body("publishedYear").optional().isInt({ min: 1000, max: new Date().getFullYear() }).withMessage("Invalid published year"),
   ],
   async (req, res) => {
@@ -71,14 +75,23 @@ router.post(
         return res.status(400).json({ message: "A book with this ISBN already exists" });
       }
 
+      const totalCopies = req.body.totalCopies || 1;
+      const availableCopies = req.body.availableCopies ?? totalCopies;
+
+      if (availableCopies > totalCopies) {
+        return res.status(400).json({
+          message: "Available copies cannot exceed total copies",
+        });
+      }
+
       const book = new Book({
         title: req.body.title,
         author: req.body.author,
         isbn: req.body.isbn,
         category: req.body.category,
         description: req.body.description,
-        totalCopies: req.body.totalCopies || 1,
-        availableCopies: req.body.availableCopies || req.body.totalCopies || 1,
+        totalCopies,
+        availableCopies,
         publishedYear: req.body.publishedYear,
       });
 
@@ -101,6 +114,10 @@ router.put(
     body("isbn").optional().notEmpty().withMessage("ISBN cannot be empty"),
     body("category").optional().notEmpty().withMessage("Category cannot be empty"),
     body("totalCopies").optional().isInt({ min: 1 }).withMessage("Total copies must be at least 1"),
+    body("availableCopies")
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage("Available copies must be 0 or greater"),
     body("publishedYear").optional().isInt({ min: 1000, max: new Date().getFullYear() }).withMessage("Invalid published year"),
   ],
   async (req, res) => {
@@ -121,6 +138,15 @@ router.put(
         if (existingBook) {
           return res.status(400).json({ message: "A book with this ISBN already exists" });
         }
+      }
+
+      const nextTotalCopies = req.body.totalCopies ?? book.totalCopies;
+      const nextAvailableCopies = req.body.availableCopies ?? book.availableCopies;
+
+      if (nextAvailableCopies > nextTotalCopies) {
+        return res.status(400).json({
+          message: "Available copies cannot exceed total copies",
+        });
       }
 
       const updatedBook = await Book.findByIdAndUpdate(

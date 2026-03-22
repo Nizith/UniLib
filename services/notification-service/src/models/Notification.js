@@ -9,6 +9,7 @@ const notificationSchema = new mongoose.Schema({
     type: String,
     enum: [
       "borrow_confirmation",
+      "borrow_activity_alert",
       "return_confirmation",
       "due_reminder",
       "overdue_alert",

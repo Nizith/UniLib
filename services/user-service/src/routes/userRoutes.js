@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const auth = require("../middleware/auth");
+const { requireInternalService } = require("../middleware/serviceAuth");
 
 const router = express.Router();
 const SELF_REGISTER_ROLES = ["student", "staff"];
@@ -596,8 +597,24 @@ router.delete("/members/:id", auth, async (req, res) => {
   }
 });
 
+// GET /internal/staff-admins - List staff/admin users (for inter-service communication)
+router.get("/internal/staff-admins", requireInternalService, async (req, res) => {
+  try {
+    const members = await User.find({
+      role: { $in: ["staff", "admin", "Staff", "Admin"] },
+    })
+      .select("name email role membershipStatus createdAt")
+      .sort({ createdAt: -1 });
+
+    res.json(members);
+  } catch (error) {
+    console.error("Get staff/admin members error:", error.message);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
 // GET /:id - Get user by ID (for inter-service communication)
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireInternalService, async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select("-password");
     if (!user) {

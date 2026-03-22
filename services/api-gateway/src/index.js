@@ -1,6 +1,8 @@
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
 const morgan = require("morgan");
 const dotenv = require("dotenv");
 const { createProxyMiddleware } = require("http-proxy-middleware");
@@ -9,6 +11,8 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+const corsOrigin = process.env.CORS_ORIGIN || "http://localhost:3000";
+const isWildcardCors = corsOrigin === "*";
 
 const services = {
   user: process.env.USER_SERVICE_URL || "http://localhost:3001",
@@ -20,9 +24,22 @@ const services = {
 app.set("trust proxy", 1);
 
 app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+app.use(
   cors({
-    origin: process.env.CORS_ORIGIN === "*" ? true : process.env.CORS_ORIGIN || true,
-    credentials: true,
+    origin: isWildcardCors ? true : corsOrigin,
+    credentials: !isWildcardCors,
+  })
+);
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: Number(process.env.RATE_LIMIT_MAX || 300),
+    standardHeaders: true,
+    legacyHeaders: false,
   })
 );
 app.use(morgan("combined"));
@@ -30,8 +47,15 @@ app.use(morgan("combined"));
 // so the upstream never receives the JSON body (causes hangs/aborts and 504 via nginx).
 
 const proxyError = (serviceName) => (err, req, res) => {
-  if (res.headersSent) return;
   const status = err.code === "ECONNREFUSED" ? 503 : 502;
+
+  // WebSocket upgrades do not provide an Express response object.
+  if (!res || typeof res.status !== "function") {
+    console.error(`Proxy error for ${serviceName}:`, err.message);
+    return;
+  }
+
+  if (res.headersSent) return;
   res.status(status).json({
     error: status === 503 ? "Service unavailable" : "Bad gateway",
     service: serviceName,

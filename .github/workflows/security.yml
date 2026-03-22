@@ -1,0 +1,46 @@
+name: Security
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - frontend
+          - services/api-gateway
+          - services/user-service
+          - services/book-catalog-service
+          - services/loan-service
+          - services/notification-service
+    defaults:
+      run:
+        working-directory: ${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+
+  sonarcloud:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
