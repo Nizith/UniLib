@@ -75,6 +75,39 @@ const emailTemplates = {
     `),
   }),
 
+  borrow_activity_alert: (bookTitle, dueDate, userName, metadata = {}) => ({
+    subject: `Borrow Activity Alert - "${bookTitle}"`,
+    html: wrapEmail(`
+      <h2 style="color: #163b63; margin: 0 0 8px 0; font-size: 22px; font-family: Georgia, serif;">Borrow Activity Alert</h2>
+      <div style="width: 40px; height: 3px; background-color: #163b63; border-radius: 2px; margin-bottom: 20px;"></div>
+      <p style="color: #203245; font-size: 16px; line-height: 1.6;">Hello <strong>${userName}</strong>,</p>
+      <p style="color: #203245; font-size: 16px; line-height: 1.6;">A new borrowing activity has been recorded in UniLib.</p>
+      <div style="margin: 20px 0; padding: 20px; background-color: #e8eef5; border-radius: 12px; border-left: 4px solid #163b63;">
+        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+          <tr>
+            <td style="padding-bottom: 8px;">
+              <span style="color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Borrower</span><br/>
+              <span style="color: #163b63; font-size: 18px; font-weight: 700;">${metadata.borrowerName || "A library member"}</span>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding-bottom: 8px;">
+              <span style="color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Book Title</span><br/>
+              <span style="color: #163b63; font-size: 18px; font-weight: 700;">${bookTitle}</span>
+            </td>
+          </tr>
+          ${dueDate ? `<tr>
+            <td>
+              <span style="color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Due Date</span><br/>
+              <span style="color: #163b63; font-size: 16px; font-weight: 600;">${dueDate}</span>
+            </td>
+          </tr>` : ""}
+        </table>
+      </div>
+      <p style="color: #6b7280; font-size: 14px; line-height: 1.6;">This alert was sent to keep staff and administrators informed about borrowing activity.</p>
+    `),
+  }),
+
   return_confirmation: (bookTitle, dueDate, userName) => ({
     subject: `Return Confirmation - "${bookTitle}"`,
     html: wrapEmail(`
@@ -152,7 +185,7 @@ const emailTemplates = {
   }),
 };
 
-const sendNotificationEmail = async (toEmail, type, bookTitle, dueDate, userName) => {
+const sendNotificationEmail = async (toEmail, type, bookTitle, dueDate, userName, metadata = {}) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.log("Email not configured. Skipping email notification.");
     return;
@@ -164,7 +197,7 @@ const sendNotificationEmail = async (toEmail, type, bookTitle, dueDate, userName
     return;
   }
 
-  const { subject, html } = templateFn(bookTitle || "a book", dueDate, userName || "User");
+  const { subject, html } = templateFn(bookTitle || "a book", dueDate, userName || "User", metadata);
 
   try {
     await transporter.sendMail({

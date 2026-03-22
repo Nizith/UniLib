@@ -3,6 +3,7 @@ const axios = require("axios");
 const { body, validationResult } = require("express-validator");
 const Notification = require("../models/Notification");
 const auth = require("../middleware/auth");
+const { INTERNAL_SERVICE_HEADER, requireInternalService } = require("../middleware/serviceAuth");
 const { sendNotificationEmail } = require("../utils/emailService");
 
 const router = express.Router();
@@ -11,20 +12,67 @@ const LOAN_SERVICE_URL =
   process.env.LOAN_SERVICE_URL || "http://localhost:3003";
 const USER_SERVICE_URL =
   process.env.USER_SERVICE_URL || "http://localhost:3001";
+const internalServiceHeaders = process.env.INTERNAL_SERVICE_TOKEN
+  ? { [INTERNAL_SERVICE_HEADER]: process.env.INTERNAL_SERVICE_TOKEN }
+  : {};
+const canManageNotifications = (requestUser, resourceUserId) =>
+  requestUser && (requestUser.id === resourceUserId || requestUser.role === "admin" || requestUser.role === "staff");
+const NOTIFICATION_TYPES = [
+  "borrow_confirmation",
+  "borrow_activity_alert",
+  "return_confirmation",
+  "due_reminder",
+  "overdue_alert",
+];
+const BORROW_CONFIRMATION_DUE_DATE_REGEX = /Due date:\s*(.+)/i;
 
-// POST / - Create a notification (inter-service communication, no auth)
+const emitToUser = (req, userId, notification) => {
+  const io = req.app.get("io");
+  const connectedUsers = req.app.get("connectedUsers");
+
+  if (io && connectedUsers && connectedUsers.has(userId)) {
+    for (const socketId of connectedUsers.get(userId)) {
+      io.to(socketId).emit("new-notification", notification);
+    }
+  }
+};
+
+const createNotification = async ({ userId, type, message, bookTitle, loanId }) => {
+  const notification = new Notification({
+    userId,
+    type,
+    message,
+    bookTitle,
+    loanId,
+  });
+
+  await notification.save();
+  return notification;
+};
+
+const fetchUserById = async (userId) => {
+  const userResponse = await axios.get(`${USER_SERVICE_URL}/api/users/${userId}`, {
+    headers: internalServiceHeaders,
+  });
+
+  return userResponse.data;
+};
+
+const fetchStaffAndAdmins = async () => {
+  const usersResponse = await axios.get(`${USER_SERVICE_URL}/api/users/internal/staff-admins`, {
+    headers: internalServiceHeaders,
+  });
+
+  return usersResponse.data;
+};
+
+// POST / - Create a notification (inter-service communication only)
 router.post(
   "/",
+  requireInternalService,
   [
     body("userId").notEmpty().withMessage("userId is required"),
-    body("type")
-      .isIn([
-        "borrow_confirmation",
-        "return_confirmation",
-        "due_reminder",
-        "overdue_alert",
-      ])
-      .withMessage("Invalid notification type"),
+    body("type").isIn(NOTIFICATION_TYPES).withMessage("Invalid notification type"),
     body("message").notEmpty().withMessage("message is required"),
   ],
   async (req, res) => {
@@ -35,40 +83,71 @@ router.post(
       }
 
       const { userId, type, message, bookTitle } = req.body;
-
-      const notification = new Notification({
+      const notification = await createNotification({
         userId,
         type,
         message,
         bookTitle,
+        loanId: req.body.loanId,
       });
-
-      await notification.save();
-
-      // Emit real-time notification via Socket.IO
-      const io = req.app.get("io");
-      const connectedUsers = req.app.get("connectedUsers");
-      if (io && connectedUsers && connectedUsers.has(userId)) {
-        for (const socketId of connectedUsers.get(userId)) {
-          io.to(socketId).emit("new-notification", notification);
-        }
-      }
+      emitToUser(req, userId, notification);
 
       // Send email notification (fire and forget)
       try {
-        const userResponse = await axios.get(
-          `${USER_SERVICE_URL}/api/users/${userId}`
-        );
-        const userEmail = userResponse.data.email;
-        const userName = userResponse.data.name || "User";
+        const user = await fetchUserById(userId);
+        const userEmail = user.email;
+        const userName = user.name || "User";
         // Extract due date from message if present
-        const dueDateMatch = message.match(/Due date:\s*(.+)/i);
+        const dueDateMatch = message.match(BORROW_CONFIRMATION_DUE_DATE_REGEX);
         const dueDate = dueDateMatch ? dueDateMatch[1] : null;
         if (userEmail) {
           sendNotificationEmail(userEmail, type, bookTitle || "a book", dueDate, userName);
         }
       } catch (err) {
         console.error("Failed to fetch user for email:", err.message);
+      }
+
+      if (type === "borrow_confirmation") {
+        try {
+          const borrower = await fetchUserById(userId);
+          const staffAndAdmins = await fetchStaffAndAdmins();
+          const dueDateMatch = message.match(BORROW_CONFIRMATION_DUE_DATE_REGEX);
+          const dueDate = dueDateMatch ? dueDateMatch[1] : null;
+          const borrowerName = borrower.name || borrower.email || "A library member";
+
+          for (const recipient of staffAndAdmins) {
+            if (!recipient?._id || recipient._id.toString() === userId.toString()) {
+              continue;
+            }
+
+            const alertMessage = `${borrowerName} borrowed "${bookTitle || "a book"}"${
+              dueDate ? ` (due ${dueDate})` : ""
+            }.`;
+
+            const staffNotification = await createNotification({
+              userId: recipient._id.toString(),
+              type: "borrow_activity_alert",
+              message: alertMessage,
+              bookTitle,
+              loanId: req.body.loanId,
+            });
+
+            emitToUser(req, recipient._id.toString(), staffNotification);
+
+            if (recipient.email) {
+              sendNotificationEmail(
+                recipient.email,
+                "borrow_activity_alert",
+                bookTitle || "a book",
+                dueDate,
+                recipient.name || recipient.email || "Staff member",
+                { borrowerName }
+              );
+            }
+          }
+        } catch (err) {
+          console.error("Failed to notify staff/admin about borrow activity:", err.message);
+        }
       }
 
       res.status(201).json({
@@ -87,6 +166,10 @@ router.get("/user/:userId", auth, async (req, res) => {
   try {
     const { userId } = req.params;
 
+    if (!canManageNotifications(req.user, userId)) {
+      return res.status(403).json({ message: "Access denied. You can only view your own notifications." });
+    }
+
     const notifications = await Notification.find({ userId }).sort({
       createdAt: -1,
     });
@@ -103,19 +186,24 @@ router.patch("/:id/read", auth, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const notification = await Notification.findByIdAndUpdate(
+    const notification = await Notification.findById(id);
+    if (!notification) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    if (!canManageNotifications(req.user, notification.userId.toString())) {
+      return res.status(403).json({ message: "Access denied. You can only update your own notifications." });
+    }
+
+    const updatedNotification = await Notification.findByIdAndUpdate(
       id,
       { read: true },
       { new: true }
     );
 
-    if (!notification) {
-      return res.status(404).json({ message: "Notification not found" });
-    }
-
     res.status(200).json({
       message: "Notification marked as read",
-      notification,
+      notification: updatedNotification,
     });
   } catch (error) {
     console.error("Error marking notification as read:", error.message);
@@ -128,11 +216,17 @@ router.delete("/:id", auth, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const notification = await Notification.findByIdAndDelete(id);
+    const notification = await Notification.findById(id);
 
     if (!notification) {
       return res.status(404).json({ message: "Notification not found" });
     }
+
+    if (!canManageNotifications(req.user, notification.userId.toString())) {
+      return res.status(403).json({ message: "Access denied. You can only delete your own notifications." });
+    }
+
+    await Notification.findByIdAndDelete(id);
 
     res.status(200).json({
       message: "Notification deleted successfully",
@@ -147,6 +241,10 @@ router.delete("/:id", auth, async (req, res) => {
 router.patch("/user/:userId/read-all", auth, async (req, res) => {
   try {
     const { userId } = req.params;
+
+    if (!canManageNotifications(req.user, userId)) {
+      return res.status(403).json({ message: "Access denied. You can only update your own notifications." });
+    }
 
     const result = await Notification.updateMany(
       { userId, read: false },
@@ -167,6 +265,10 @@ router.get("/user/:userId/unread-count", auth, async (req, res) => {
   try {
     const { userId } = req.params;
 
+    if (!canManageNotifications(req.user, userId)) {
+      return res.status(403).json({ message: "Access denied. You can only view your own notifications." });
+    }
+
     const count = await Notification.countDocuments({ userId, read: false });
 
     res.status(200).json({ unreadCount: count });
@@ -176,13 +278,13 @@ router.get("/user/:userId/unread-count", auth, async (req, res) => {
   }
 });
 
-// POST /check-overdue - Trigger overdue check (no auth, for cron/scheduled tasks)
-router.post("/check-overdue", async (req, res) => {
+// POST /check-overdue - Trigger overdue check (internal only, for cron/scheduled tasks)
+router.post("/check-overdue", requireInternalService, async (req, res) => {
   try {
     // Fetch overdue loans from Loan Service
-    const loansResponse = await axios.get(
-      `${LOAN_SERVICE_URL}/api/loans/overdue`
-    );
+    const loansResponse = await axios.get(`${LOAN_SERVICE_URL}/api/loans/overdue`, {
+      headers: internalServiceHeaders,
+    });
     const overdueLoans = loansResponse.data;
 
     const notifications = [];
@@ -199,9 +301,9 @@ router.post("/check-overdue", async (req, res) => {
       let userName = "User";
       let userEmail = null;
       try {
-        const userResponse = await axios.get(
-          `${USER_SERVICE_URL}/api/users/${loan.userId}`
-        );
+        const userResponse = await axios.get(`${USER_SERVICE_URL}/api/users/${loan.userId}`, {
+          headers: internalServiceHeaders,
+        });
         userName = userResponse.data.name || "User";
         userEmail = userResponse.data.email;
       } catch (err) {
@@ -212,25 +314,15 @@ router.post("/check-overdue", async (req, res) => {
       }
 
       // Create overdue alert notification
-      const notification = new Notification({
+      const notification = await createNotification({
         userId: loan.userId,
         type: "overdue_alert",
         message: `Dear ${userName}, the book "${loan.bookTitle}" is overdue. Please return it as soon as possible.`,
         bookTitle: loan.bookTitle,
         loanId: loan._id,
       });
-
-      await notification.save();
       notifications.push(notification);
-
-      // Emit real-time notification
-      const io = req.app.get("io");
-      const connectedUsers = req.app.get("connectedUsers");
-      if (io && connectedUsers && connectedUsers.has(loan.userId)) {
-        for (const socketId of connectedUsers.get(loan.userId)) {
-          io.to(socketId).emit("new-notification", notification);
-        }
-      }
+      emitToUser(req, loan.userId, notification);
 
       // Send email notification
       if (userEmail) {
@@ -248,13 +340,13 @@ router.post("/check-overdue", async (req, res) => {
   }
 });
 
-// POST /check-due-reminders - Trigger due date reminder check (no auth, for cron/scheduled tasks)
-router.post("/check-due-reminders", async (req, res) => {
+// POST /check-due-reminders - Trigger due date reminder check (internal only, for cron/scheduled tasks)
+router.post("/check-due-reminders", requireInternalService, async (req, res) => {
   try {
     // Fetch loans due within 2 days from Loan Service
-    const loansResponse = await axios.get(
-      `${LOAN_SERVICE_URL}/api/loans/due-soon`
-    );
+    const loansResponse = await axios.get(`${LOAN_SERVICE_URL}/api/loans/due-soon`, {
+      headers: internalServiceHeaders,
+    });
     const dueSoonLoans = loansResponse.data;
 
     const notifications = [];
@@ -271,9 +363,9 @@ router.post("/check-due-reminders", async (req, res) => {
       let userName = "User";
       let userEmail = null;
       try {
-        const userResponse = await axios.get(
-          `${USER_SERVICE_URL}/api/users/${loan.userId}`
-        );
+        const userResponse = await axios.get(`${USER_SERVICE_URL}/api/users/${loan.userId}`, {
+          headers: internalServiceHeaders,
+        });
         userName = userResponse.data.name || "User";
         userEmail = userResponse.data.email;
       } catch (err) {
@@ -286,25 +378,15 @@ router.post("/check-due-reminders", async (req, res) => {
       const dueDate = new Date(loan.dueDate).toDateString();
 
       // Create due reminder notification
-      const notification = new Notification({
+      const notification = await createNotification({
         userId: loan.userId,
         type: "due_reminder",
         message: `Dear ${userName}, the book "${loan.bookTitle}" is due on ${dueDate}. Please return it on time.`,
         bookTitle: loan.bookTitle,
         loanId: loan._id,
       });
-
-      await notification.save();
       notifications.push(notification);
-
-      // Emit real-time notification
-      const io = req.app.get("io");
-      const connectedUsers = req.app.get("connectedUsers");
-      if (io && connectedUsers && connectedUsers.has(loan.userId)) {
-        for (const socketId of connectedUsers.get(loan.userId)) {
-          io.to(socketId).emit("new-notification", notification);
-        }
-      }
+      emitToUser(req, loan.userId, notification);
 
       // Send email notification
       if (userEmail) {
