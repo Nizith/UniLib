@@ -1,0 +1,839 @@
+openapi: 3.0.3
+info:
+  title: UniLib API
+  description: |
+    API documentation for the UniLib Library Management System.
+    All services are accessed through the API Gateway.
+
+    **Base URL (Production):** `https://api-gateway.politeocean-478902af.eastus.azurecontainerapps.io`
+
+    **Authentication:** Most endpoints require a Bearer JWT token in the `Authorization` header.
+    Obtain a token by calling `POST /api/users/login`.
+  version: 1.0.0
+
+servers:
+  - url: https://api-gateway.politeocean-478902af.eastus.azurecontainerapps.io
+    description: Azure Production
+  - url: http://localhost:8080
+    description: Local Development (via API Gateway)
+
+tags:
+  - name: Users
+    description: User registration, login, and profile management
+  - name: Books
+    description: Book catalog - browse, add, update, delete books
+  - name: Loans
+    description: Borrow and return books, view loan history
+  - name: Notifications
+    description: View and manage user notifications
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "64f1a2b3c4d5e6f7a8b9c0d1"
+        name:
+          type: string
+          example: "Nisitha Dassanayake"
+        email:
+          type: string
+          example: "nisitha@unilib.com"
+        role:
+          type: string
+          enum: [student, staff, admin]
+          example: student
+        membershipStatus:
+          type: string
+          enum: [active, inactive, suspended]
+          example: active
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIsInR..."
+        user:
+          $ref: '#/components/schemas/User'
+
+    Book:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "64f1a2b3c4d5e6f7a8b9c0d1"
+        title:
+          type: string
+          example: "Clean Code"
+        author:
+          type: string
+          example: "Robert C. Martin"
+        isbn:
+          type: string
+          example: "978-0132350884"
+        category:
+          type: string
+          example: "Software Engineering"
+        description:
+          type: string
+          example: "A handbook of agile software craftsmanship"
+        totalCopies:
+          type: integer
+          example: 5
+        availableCopies:
+          type: integer
+          example: 3
+        publishedYear:
+          type: integer
+          example: 2008
+
+    Loan:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "64f1a2b3c4d5e6f7a8b9c0d2"
+        userId:
+          type: string
+          example: "64f1a2b3c4d5e6f7a8b9c0d1"
+        bookId:
+          type: string
+          example: "64f1a2b3c4d5e6f7a8b9c0d3"
+        bookTitle:
+          type: string
+          example: "Clean Code"
+        status:
+          type: string
+          enum: [borrowed, returned, overdue]
+          example: borrowed
+        dueDate:
+          type: string
+          format: date-time
+          example: "2026-04-05T00:00:00.000Z"
+        returnDate:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "64f1a2b3c4d5e6f7a8b9c0d4"
+        userId:
+          type: string
+        type:
+          type: string
+          enum: [borrow_confirmation, return_confirmation, due_reminder, overdue_alert, borrow_activity_alert]
+        message:
+          type: string
+          example: "You have successfully borrowed 'Clean Code'. Due date: Mon Apr 05 2026"
+        bookTitle:
+          type: string
+        read:
+          type: boolean
+          example: false
+        createdAt:
+          type: string
+          format: date-time
+
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Invalid credentials"
+
+paths:
+
+  # ─── USER SERVICE ────────────────────────────────────────────────────────────
+
+  /api/users/register:
+    post:
+      tags: [Users]
+      summary: Register a new user
+      description: Creates a new student or staff account. Admin accounts cannot be created through this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name:
+                  type: string
+                  example: "Nisitha Dassanayake"
+                email:
+                  type: string
+                  example: "nisitha@unilib.com"
+                password:
+                  type: string
+                  minLength: 6
+                  example: "password123"
+                role:
+                  type: string
+                  enum: [student, staff]
+                  default: student
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Validation error or user already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/users/login:
+    post:
+      tags: [Users]
+      summary: Login and get JWT token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  example: "nisitha@unilib.com"
+                password:
+                  type: string
+                  example: "password123"
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Account suspended
+
+  /api/users/profile:
+    get:
+      tags: [Users]
+      summary: Get current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          description: Unauthorized
+    put:
+      tags: [Users]
+      summary: Update current user profile
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+      responses:
+        '200':
+          description: Profile updated
+        '401':
+          description: Unauthorized
+    delete:
+      tags: [Users]
+      summary: Delete current user profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Profile deleted
+        '401':
+          description: Unauthorized
+
+  /api/users/profile/change-password:
+    patch:
+      tags: [Users]
+      summary: Change current user password
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword, confirmNewPassword]
+              properties:
+                currentPassword:
+                  type: string
+                newPassword:
+                  type: string
+                  minLength: 6
+                confirmNewPassword:
+                  type: string
+      responses:
+        '200':
+          description: Password changed successfully
+        '400':
+          description: Current password incorrect or passwords don't match
+
+  /api/users/verify-token:
+    get:
+      tags: [Users]
+      summary: Verify JWT token validity
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Token is valid
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: '#/components/schemas/User'
+
+  /api/users/students:
+    get:
+      tags: [Users]
+      summary: List all students (staff/admin only)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of students
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '403':
+          description: Forbidden
+
+  /api/users/students/{id}/membership:
+    patch:
+      tags: [Users]
+      summary: Update student membership status (staff/admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [membershipStatus]
+              properties:
+                membershipStatus:
+                  type: string
+                  enum: [active, inactive, suspended]
+      responses:
+        '200':
+          description: Membership updated
+        '403':
+          description: Forbidden
+
+  /api/users/members:
+    get:
+      tags: [Users]
+      summary: List all staff and students (admin only)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '403':
+          description: Forbidden
+
+  /api/users/members/{id}:
+    put:
+      tags: [Users]
+      summary: Update a member's details (admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                role:
+                  type: string
+                  enum: [student, staff]
+                membershipStatus:
+                  type: string
+                  enum: [active, inactive, suspended]
+                password:
+                  type: string
+                  minLength: 6
+      responses:
+        '200':
+          description: Member updated
+        '403':
+          description: Forbidden
+    delete:
+      tags: [Users]
+      summary: Delete a member (admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Member deleted
+        '403':
+          description: Forbidden
+
+  # ─── BOOK CATALOG SERVICE ─────────────────────────────────────────────────────
+
+  /api/books:
+    get:
+      tags: [Books]
+      summary: Get all books (public)
+      description: Returns all books. Supports optional search and category filters.
+      parameters:
+        - name: search
+          in: query
+          description: Search by title, author, or ISBN
+          schema:
+            type: string
+          example: "Clean Code"
+        - name: category
+          in: query
+          description: Filter by category
+          schema:
+            type: string
+          example: "Software Engineering"
+      responses:
+        '200':
+          description: List of books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+    post:
+      tags: [Books]
+      summary: Add a new book (admin only)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, author, isbn, category]
+              properties:
+                title:
+                  type: string
+                  example: "Clean Code"
+                author:
+                  type: string
+                  example: "Robert C. Martin"
+                isbn:
+                  type: string
+                  example: "978-0132350884"
+                category:
+                  type: string
+                  example: "Software Engineering"
+                description:
+                  type: string
+                totalCopies:
+                  type: integer
+                  example: 5
+                availableCopies:
+                  type: integer
+                  example: 5
+                publishedYear:
+                  type: integer
+                  example: 2008
+      responses:
+        '201':
+          description: Book created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '400':
+          description: ISBN already exists or validation error
+        '403':
+          description: Admin access required
+
+  /api/books/{id}:
+    get:
+      tags: [Books]
+      summary: Get a book by ID (public)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Book details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Book'
+        '404':
+          description: Book not found
+    put:
+      tags: [Books]
+      summary: Update a book (admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                author:
+                  type: string
+                isbn:
+                  type: string
+                category:
+                  type: string
+                totalCopies:
+                  type: integer
+                availableCopies:
+                  type: integer
+      responses:
+        '200':
+          description: Book updated
+        '403':
+          description: Admin access required
+        '404':
+          description: Book not found
+    delete:
+      tags: [Books]
+      summary: Delete a book (admin only)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Book deleted
+        '403':
+          description: Admin access required
+        '404':
+          description: Book not found
+
+  # ─── LOAN SERVICE ─────────────────────────────────────────────────────────────
+
+  /api/loans/borrow:
+    post:
+      tags: [Loans]
+      summary: Borrow a book
+      description: |
+        Creates a loan for the authenticated user. Automatically:
+        - Checks book availability via Book Catalog Service
+        - Decrements available copies
+        - Sends a borrow confirmation notification
+        - Sets due date to 14 days from today
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bookId]
+              properties:
+                bookId:
+                  type: string
+                  example: "64f1a2b3c4d5e6f7a8b9c0d1"
+      responses:
+        '201':
+          description: Book borrowed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Loan'
+        '400':
+          description: No copies available or book already borrowed
+        '404':
+          description: Book not found
+
+  /api/loans/active:
+    get:
+      tags: [Loans]
+      summary: Get all active loans (admin/staff only)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of active loans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Loan'
+        '403':
+          description: Admin or staff access required
+
+  /api/loans/return/{loanId}:
+    post:
+      tags: [Loans]
+      summary: Return a book (admin/staff only)
+      description: |
+        Marks a loan as returned. Automatically:
+        - Increments the book's available copies via Book Catalog Service
+        - Sends a return confirmation notification
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: loanId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Book returned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Loan'
+        '400':
+          description: Book already returned
+        '403':
+          description: Admin or staff access required
+        '404':
+          description: Loan not found
+
+  /api/loans/user/{userId}:
+    get:
+      tags: [Loans]
+      summary: Get all loans for a user
+      description: Users can only view their own loans. Admin/staff can view any user's loans.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of loans
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Loan'
+        '403':
+          description: Access denied
+
+  /api/loans/{id}:
+    get:
+      tags: [Loans]
+      summary: Get a specific loan by ID
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Loan details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Loan'
+        '403':
+          description: Access denied
+        '404':
+          description: Loan not found
+
+  # ─── NOTIFICATION SERVICE ─────────────────────────────────────────────────────
+
+  /api/notifications/user/{userId}:
+    get:
+      tags: [Notifications]
+      summary: Get all notifications for a user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+        '403':
+          description: Access denied
+
+  /api/notifications/user/{userId}/unread-count:
+    get:
+      tags: [Notifications]
+      summary: Get unread notification count for a user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  unreadCount:
+                    type: integer
+                    example: 3
+
+  /api/notifications/user/{userId}/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Mark all notifications as read for a user
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: All notifications marked as read
+
+  /api/notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Mark a single notification as read
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Notification marked as read
+        '403':
+          description: Access denied
+        '404':
+          description: Notification not found
+
+  /api/notifications/{id}:
+    delete:
+      tags: [Notifications]
+      summary: Delete a notification
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Notification deleted
+        '403':
+          description: Access denied
+        '404':
+          description: Notification not found
