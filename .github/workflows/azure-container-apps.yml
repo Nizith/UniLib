@@ -1,16 +1,21 @@
-# Build Docker images and push to Azure Container Registry.
-# After images are in ACR, either re-run infra/azure/deploy.sh (updates) or use:
-#   az containerapp update --name <app> --resource-group unilib-rg --image <acr>/<app>:<tag>
+# CI/CD: Build images and push to Azure Container Registry on every push to main.
+# After this runs, update running containers with the script in infra/azure/README.md
+# or run manually in Azure Cloud Shell:
+#   REG="unilib9ef41d.azurecr.io"; RG="unilib-rg"
+#   for svc in user-service book-catalog-service loan-service notification-service api-gateway; do
+#     az containerapp update --name "$svc" --resource-group "$RG" --image "$REG/$svc:latest" --output none
+#   done
+#   az containerapp update --name frontend --resource-group "$RG" --image "$REG/frontend:latest" --output none
 #
-# Secrets (GitHub repo → Settings → Secrets):
-#   ACR_LOGIN_SERVER   e.g. myregistry.azurecr.io
-#   ACR_USERNAME       ACR admin username
-#   ACR_PASSWORD       ACR admin password
+# GitHub Secrets required (Settings → Secrets and variables → Actions):
+#   ACR_LOGIN_SERVER       e.g. unilib9ef41d.azurecr.io
+#   ACR_USERNAME           ACR admin username (from ACR → Access keys)
+#   ACR_PASSWORD           ACR admin password (from ACR → Access keys)
 #
-# Optional — needed to build the frontend image in CI (same URLs as first manual deploy):
-#   GATEWAY_PUBLIC_ORIGIN  e.g. https://api-gateway-xxxxx.azurecontainerapps.io  (no trailing slash)
+# Optional:
+#   GATEWAY_PUBLIC_ORIGIN  e.g. https://api-gateway-xxxxx.azurecontainerapps.io (no trailing slash)
 
-name: Azure ACR build and push
+name: Build and Push to Azure Container Registry
 
 on:
   workflow_dispatch:
@@ -22,7 +27,7 @@ on:
       - '.github/workflows/azure-container-apps.yml'
 
 jobs:
-  docker-push:
+  build-and-push:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,19 +46,20 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_SHA:0:7}"
           for svc in user-service book-catalog-service loan-service notification-service api-gateway; do
+            echo ">>> Building $svc..."
             docker build -t "$REG/$svc:$TAG" -t "$REG/$svc:latest" "./services/$svc"
             docker push "$REG/$svc:$TAG"
             docker push "$REG/$svc:latest"
           done
 
-      - name: Build and push frontend (optional)
+      - name: Build and push frontend
         env:
           REG: ${{ secrets.ACR_LOGIN_SERVER }}
           ORIGIN: ${{ secrets.GATEWAY_PUBLIC_ORIGIN }}
         run: |
           set -euo pipefail
           if [ -z "${ORIGIN:-}" ]; then
-            echo "GATEWAY_PUBLIC_ORIGIN secret not set — skipping frontend image (set it after first deploy)."
+            echo "GATEWAY_PUBLIC_ORIGIN not set — skipping frontend build."
             exit 0
           fi
           TAG="${GITHUB_SHA:0:7}"
@@ -63,3 +69,4 @@ jobs:
             -t "$REG/frontend:$TAG" -t "$REG/frontend:latest" ./frontend
           docker push "$REG/frontend:$TAG"
           docker push "$REG/frontend:latest"
+          echo ">>> Frontend image pushed successfully!"
